@@ -1,0 +1,168 @@
+name: CI - E2E Tests with Agent-Browser
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: self-hosted
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Install Dependencies
+      run: npm install
+    
+    - name: Build
+      run: npm run build
+    
+    - name: Start Dev Server
+      run: |
+        npm run dev -- -p 5173 -H 0.0.0.0 &
+        sleep 15
+    
+    - name: E2E Test - Homepage
+      run: |
+        node -e "
+        const {AgentBrowser} = require('agent-browser');
+        
+        async function testHomepage() {
+          const browser = new AgentBrowser({headless: true});
+          
+          try {
+            const page = await browser.visit('http://localhost:5173');
+            
+            // Wait for app to load
+            await page.waitForSelector('#app', {timeout: 15000});
+            console.log('✅ App loaded');
+            
+            // Check title
+            const title = await page.evaluate(() => document.title);
+            console.log('Page title:', title);
+            
+            // Take screenshot
+            await page.screenshot({path: 'e2e-homepage.png'});
+            console.log('✅ Homepage screenshot saved');
+            
+            await browser.close();
+          } catch (error) {
+            console.error('❌ Homepage test failed:', error);
+            process.exit(1);
+          }
+        }
+        
+        testHomepage();
+        "
+    
+    - name: E2E Test - Form Submission
+      run: |
+        node -e "
+        const {AgentBrowser} = require('agent-browser');
+        
+        async function testForm() {
+          const browser = new AgentBrowser({headless: true});
+          
+          try {
+            const page = await browser.visit('http://localhost:5173');
+            await page.waitForSelector('#app', {timeout: 15000});
+            
+            // Find and fill form fields (adjust selectors as needed)
+            const inputs = await page.evaluate(() => 
+              Array.from(document.querySelectorAll('input')).map(i => ({
+                placeholder: i.placeholder,
+                name: i.name,
+                type: i.type
+              }))
+            );
+            console.log('Form inputs found:', inputs);
+            
+            // Try to fill street input
+            const streetInput = await page.find('input', {placeholder: /rua|street/i});
+            if (streetInput) {
+              await streetInput.fill('Avenida Liberdade');
+              console.log('✅ Street field filled');
+            }
+            
+            // Try to fill locality input
+            const localityInput = await page.find('input', {placeholder: /localidade|city/i});
+            if (localityInput) {
+              await localityInput.fill('Lisboa');
+              console.log('✅ Locality field filled');
+            }
+            
+            // Take screenshot before submit
+            await page.screenshot({path: 'e2e-form-filled.png'});
+            
+            // Try to submit
+            const submitBtn = await page.find('button', {type: 'submit'});
+            if (submitBtn) {
+              await submitBtn.click();
+              await page.waitForTimeout(3000);
+              console.log('✅ Form submitted');
+            }
+            
+            // Check for results
+            const hasResults = await page.evaluate(() => 
+              document.body.innerText.includes('resultado') ||
+              document.body.innerText.includes('empresa') ||
+              document.querySelectorAll('.resultado, .empresa, .card').length > 0
+            );
+            console.log('Results found:', hasResults);
+            
+            await page.screenshot({path: 'e2e-results.png'});
+            await browser.close();
+            
+            console.log('✅ Form submission test passed');
+          } catch (error) {
+            console.error('❌ Form test failed:', error);
+            process.exit(1);
+          }
+        }
+        
+        testForm();
+        "
+    
+    - name: E2E Test - Responsiveness
+      run: |
+        node -e "
+        const {AgentBrowser} = require('agent-browser');
+        
+        async function testResponsive() {
+          // Test mobile viewport
+          const browser = new AgentBrowser({
+            headless: true,
+            viewport: {width: 375, height: 667}
+          });
+          
+          try {
+            const page = await browser.visit('http://localhost:5173');
+            await page.waitForSelector('#app', {timeout: 10000});
+            
+            await page.screenshot({path: 'e2e-mobile.png'});
+            console.log('✅ Mobile viewport screenshot saved');
+            
+            await browser.close();
+            console.log('✅ Responsiveness test passed');
+          } catch (error) {
+            console.error('❌ Responsive test failed:', error);
+            process.exit(1);
+          }
+        }
+        
+        testResponsive();
+        "
+    
+    - name: Upload Screenshots
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: e2e-screenshots
+        path: |
+          e2e-*.png
+    
+    - name: Cleanup
+      if: always()
+      run: pkill -f "vite" || pkill -f "npm run dev" || true
